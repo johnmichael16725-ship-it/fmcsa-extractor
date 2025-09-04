@@ -1,30 +1,28 @@
-name: FMCSA Headless Extractor
+name: FMCSA Continuous Extractor
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'both (extract) or urls (only find URLs)'
+      batch_index:
+        description: "Batch index to run (0-based)"
         required: false
-        default: 'both'
-      concurrency:
-        description: 'Parallel requests'
-        required: false
-        default: '6'
-      delay:
-        description: 'Delay between waves (ms)'
-        required: false
-        default: '300'
+        default: "0"
       batch_size:
-        description: 'Batch size before pause'
+        description: "Batch size per run"
         required: false
-        default: '500'
+        default: "250"
+      concurrency:
+        description: "Parallel requests"
+        required: false
+        default: "4"
+      delay:
+        description: "Delay between waves (ms)"
+        required: false
+        default: "1000"
       wait_seconds:
-        description: 'Pause between batches (seconds)'
+        description: "Pause between batches (seconds)"
         required: false
-        default: '0'
-  schedule:
-    - cron: '0 3 * * *'  # optional nightly run
+        default: "0"
 
 jobs:
   run:
@@ -37,30 +35,50 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run extractor
-        env:
-          MODE: ${{ github.event.inputs.mode || 'both' }}
-          CONCURRENCY: ${{ github.event.inputs.concurrency || '6' }}
-          DELAY: ${{ github.event.inputs.delay || '300' }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size || '500' }}
-          WAIT_SECONDS: ${{ github.event.inputs.wait_seconds || '0' }}
+      - name: Prepare batch list
+        id: prep
         run: |
-          node -v
+          BATCH_INDEX=${{ github.event.inputs.batch_index }}
+          BATCH_SIZE=${{ github.event.inputs.batch_size }}
+
+          TOTAL=$(wc -l < mc_list.txt)
+          START=$((BATCH_INDEX * BATCH_SIZE))
+          END=$((START + BATCH_SIZE))
+          if [ $START -ge $TOTAL ]; then
+            echo "All batches completed. Nothing more to run."
+            echo "done=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          sed -n "$((START+1)),$((END))p" mc_list.txt > batch.txt
+          echo "Processing MCs $((START+1)) to $((END)) of $TOTAL"
+          echo "done=false" >> $GITHUB_OUTPUT
+          echo "start=$START" >> $GITHUB_OUTPUT
+          echo "end=$END" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Run extractor
+        if: steps.prep.outputs.done != 'true'
+        env:
+          CONCURRENCY: ${{ github.event.inputs.concurrency }}
+          DELAY: ${{ github.event.inputs.delay }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
+          WAIT_SECONDS: ${{ github.event.inputs.wait_seconds }}
+        run: |
+          mv batch.txt mc_list.txt
           node extractor.js
 
-      # ✅ Upload all CSVs that extractor.js has written (per batch)
       - name: Upload CSV artifacts
-        if: always()
+        if: always() && steps.prep.outputs.done != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: fmcsa-output-${{ github.run_id }}
+          name: fmcsa-output-batch-${{ github.event.inputs.batch_index }}
           path: output/*.csv
           if-no-files-found: ignore
           retention-days: 7
 
-      # ✅ Commit CSVs back to repo as backup
       - name: Commit CSV back to repo
-        if: always()
+        if: always() && steps.prep.outputs.done != 'true'
         run: |
           ts=$(date +"%Y-%m-%d_%H-%M-%S")
           mkdir -p output_committed
@@ -68,5 +86,16 @@ jobs:
           git config user.name "gh-actions"
           git config user.email "actions@github.com"
           git add output_committed || true
-          git commit -m "FMCSA CSV $ts" || echo "nothing to commit"
+          git commit -m "FMCSA CSV batch-${{ github.event.inputs.batch_index }} $ts" || echo "nothing to commit"
           git push || echo "push failed (likely no changes)"
+
+      - name: Dispatch next batch
+        if: steps.prep.outputs.done != 'true'
+        run: |
+          NEXT=$(( ${{ github.event.inputs.batch_index }} + 1 ))
+          echo "Dispatching next batch: $NEXT"
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.REPO_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/fmcsa-continuous-extractor.yml/dispatches \
+            -d "{\"ref\":\"${{ github.ref_name }}\",\"inputs\":{\"batch_index\":\"$NEXT\",\"batch_size\":\"${{ github.event.inputs.batch_size }}\",\"concurrency\":\"${{ github.event.inputs.concurrency }}\",\"delay\":\"${{ github.event.inputs.delay }}\",\"wait_seconds\":\"${{ github.event.inputs.wait_seconds }}\"}}"
