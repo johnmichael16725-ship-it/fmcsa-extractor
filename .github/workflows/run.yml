@@ -1,101 +1,29 @@
-name: FMCSA Continuous Extractor
+name: FMCSA Dispatcher
 
 on:
   workflow_dispatch:
     inputs:
-      batch_index:
-        description: "Batch index to run (0-based)"
-        required: false
-        default: "0"
       batch_size:
-        description: "Batch size per run"
+        description: 'How many MCs per batch'
         required: false
-        default: "250"
-      concurrency:
-        description: "Parallel requests"
-        required: false
-        default: "4"
-      delay:
-        description: "Delay between waves (ms)"
-        required: false
-        default: "1000"
-      wait_seconds:
-        description: "Pause between batches (seconds)"
-        required: false
-        default: "0"
+        default: '250'
 
 jobs:
-  run:
+  dispatch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Prepare batch list
-        id: prep
+      - name: Split mc_list.txt into batches
         run: |
-          BATCH_INDEX=${{ github.event.inputs.batch_index }}
-          BATCH_SIZE=${{ github.event.inputs.batch_size }}
+          mkdir -p batches
+          split -l ${{ github.event.inputs.batch_size }} mc_list.txt batches/batch_
 
-          TOTAL=$(wc -l < mc_list.txt)
-          START=$((BATCH_INDEX * BATCH_SIZE))
-          END=$((START + BATCH_SIZE))
-          if [ $START -ge $TOTAL ]; then
-            echo "All batches completed. Nothing more to run."
-            echo "done=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          sed -n "$((START+1)),$((END))p" mc_list.txt > batch.txt
-          echo "Processing MCs $((START+1)) to $((END)) of $TOTAL"
-          echo "done=false" >> $GITHUB_OUTPUT
-          echo "start=$START" >> $GITHUB_OUTPUT
-          echo "end=$END" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-
-      - name: Run extractor
-        if: steps.prep.outputs.done != 'true'
+      - name: Dispatch extractor for each batch
+        run: |
+          for f in batches/*; do
+            echo "Dispatching batch $f"
+            gh workflow run extractor.yml -f batch_file=$f
+          done
         env:
-          CONCURRENCY: ${{ github.event.inputs.concurrency }}
-          DELAY: ${{ github.event.inputs.delay }}
-          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
-          WAIT_SECONDS: ${{ github.event.inputs.wait_seconds }}
-        run: |
-          mv batch.txt mc_list.txt
-          node extractor.js
-
-      - name: Upload CSV artifacts
-        if: always() && steps.prep.outputs.done != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: fmcsa-output-batch-${{ github.event.inputs.batch_index }}
-          path: output/*.csv
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Commit CSV back to repo
-        if: always() && steps.prep.outputs.done != 'true'
-        run: |
-          ts=$(date +"%Y-%m-%d_%H-%M-%S")
-          mkdir -p output_committed
-          cp -r output/*.csv output_committed/ || true
-          git config user.name "gh-actions"
-          git config user.email "actions@github.com"
-          git add output_committed || true
-          git commit -m "FMCSA CSV batch-${{ github.event.inputs.batch_index }} $ts" || echo "nothing to commit"
-          git push || echo "push failed (likely no changes)"
-
-      - name: Dispatch next batch
-        if: steps.prep.outputs.done != 'true'
-        run: |
-          NEXT=$(( ${{ github.event.inputs.batch_index }} + 1 ))
-          echo "Dispatching next batch: $NEXT"
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.REPO_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/actions/workflows/fmcsa-continuous-extractor.yml/dispatches \
-            -d "{\"ref\":\"${{ github.ref_name }}\",\"inputs\":{\"batch_index\":\"$NEXT\",\"batch_size\":\"${{ github.event.inputs.batch_size }}\",\"concurrency\":\"${{ github.event.inputs.concurrency }}\",\"delay\":\"${{ github.event.inputs.delay }}\",\"wait_seconds\":\"${{ github.event.inputs.wait_seconds }}\"}}"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
