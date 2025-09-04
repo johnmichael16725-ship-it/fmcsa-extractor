@@ -48,7 +48,7 @@ jobs:
           node -v
           node extractor.js
 
-      # ✅ Upload CSV after each batch (not just at the end)
+      # ✅ Upload all CSVs that extractor.js has written (per batch)
       - name: Upload CSV artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,7 +58,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # ✅ Commit CSVs back to repo as backup
       - name: Commit CSV back to repo
+        if: always()
         run: |
           ts=$(date +"%Y-%m-%d_%H-%M-%S")
           mkdir -p output_committed
