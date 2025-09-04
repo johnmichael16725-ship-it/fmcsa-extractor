@@ -8,10 +8,10 @@ import fs from 'fs';
 import path from 'path';
 
 // ---- Config ----
-const CONCURRENCY = Number(process.env.CONCURRENCY || 6);
-const DELAY = Number(process.env.DELAY || 300); // ms between waves
-const BATCH_SIZE = Number(process.env.BATCH_SIZE || 500);
-const WAIT_SECONDS = Number(process.env.WAIT_SECONDS || 0);
+const CONCURRENCY = Number(process.env.CONCURRENCY || 4);
+const DELAY = Number(process.env.DELAY || 1000); // ms between waves
+const BATCH_SIZE = Number(process.env.BATCH_SIZE || 250);
+const WAIT_SECONDS = Number(process.env.WAIT_SECONDS || 360);
 const MODE = String(process.env.MODE || 'both'); // 'both' or 'urls'
 
 const EXTRACT_TIMEOUT_MS = 20000;
@@ -170,13 +170,13 @@ async function run(){
   const mcList = raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   console.log(`[${now()}] MCs loaded: ${mcList.length}`);
 
-  const rows = [];
   const validUrls = [];
 
   for (let start=0; start<mcList.length; start += BATCH_SIZE){
     const end = Math.min(mcList.length, start + BATCH_SIZE);
     console.log(`[${now()}] Processing batch ${start+1}-${end} …`);
 
+    const rows = []; // ✅ reset per batch
     let i = start;
     while (i < end){
       const slice = mcList.slice(i, Math.min(end, i+CONCURRENCY));
@@ -192,9 +192,9 @@ async function run(){
       await sleep(Math.max(50, DELAY));
     }
 
-    // After each batch, write partial CSV
+    // ✅ Write CSV for this batch only
     const ts = new Date().toISOString().replace(/[:.]/g,'-');
-    const outCsv = path.join(OUTPUT_DIR, `fmcsa_batch_${ts}.csv`);
+    const outCsv = path.join(OUTPUT_DIR, `fmcsa_batch_${start+1}-${end}_${ts}.csv`);
     const headers = ['email','mcNumber','phone','url'];
     const csv = [headers.join(',')]
       .concat(rows.map(r => headers.map(h=>`"${String(r[h]||'').replace(/"/g,'""')}"`).join(',')))
