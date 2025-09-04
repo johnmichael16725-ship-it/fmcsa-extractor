@@ -1,0 +1,62 @@
+name: FMCSA Headless Extractor
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'both (extract) or urls (only find URLs)'
+        required: false
+        default: 'both'
+      concurrency:
+        description: 'Parallel requests'
+        required: false
+        default: '6'
+      delay:
+        description: 'Delay between waves (ms)'
+        required: false
+        default: '300'
+      batch_size:
+        description: 'Batch size before pause'
+        required: false
+        default: '500'
+      wait_seconds:
+        description: 'Pause between batches (seconds)'
+        required: false
+        default: '0'
+  schedule:
+    - cron: '0 3 * * *'  # optional nightly run
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run extractor
+        env:
+          MODE: ${{ github.event.inputs.mode || 'both' }}
+          CONCURRENCY: ${{ github.event.inputs.concurrency || '6' }}
+          DELAY: ${{ github.event.inputs.delay || '300' }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size || '500' }}
+          WAIT_SECONDS: ${{ github.event.inputs.wait_seconds || '0' }}
+        run: |
+          node -v
+          node extractor.js
+      - name: Upload CSV artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmcsa-output
+          path: output/*.csv
+      - name: Commit CSV back to repo
+        run: |
+          ts=$(date +"%Y-%m-%d_%H-%M-%S")
+          mkdir -p output_committed
+          cp -r output/*.csv output_committed/ || true
+          git config user.name "gh-actions"
+          git config user.email "actions@github.com"
+          git add output_committed || true
+          git commit -m "FMCSA CSV $ts" || echo "nothing to commit"
+          git push || echo "push failed (likely no changes)"
