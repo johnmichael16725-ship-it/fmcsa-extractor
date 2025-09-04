@@ -31,10 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Run extractor
         env:
           MODE: ${{ github.event.inputs.mode || 'both' }}
@@ -45,11 +47,17 @@ jobs:
         run: |
           node -v
           node extractor.js
+
+      # ✅ Upload CSV after each batch (not just at the end)
       - name: Upload CSV artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fmcsa-output
+          name: fmcsa-output-${{ github.run_id }}
           path: output/*.csv
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Commit CSV back to repo
         run: |
           ts=$(date +"%Y-%m-%d_%H-%M-%S")
