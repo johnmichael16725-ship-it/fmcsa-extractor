@@ -1,8 +1,8 @@
 // ===== extractor.js =====
 // FMCSA scraping headlessly (Node >= 18, global fetch).
 // Reads MCs from batch.txt (if present), otherwise mc_list.txt.
-// Outputs CSV to ./output/fmcsa_batch_<range>_<timestamp>.csv
-// Config via env vars: CONCURRENCY, DELAY, BATCH_SIZE, WAIT_SECONDS, MODE
+// Outputs CSV to ./output/fmcsa_batch_<batchIndex>_<timestamp>.csv
+// Config via env vars: CONCURRENCY, DELAY, BATCH_SIZE, WAIT_SECONDS, MODE, BATCH_INDEX
 
 import fs from 'fs';
 import path from 'path';
@@ -13,6 +13,7 @@ const DELAY = Number(process.env.DELAY || 1000); // ms between waves
 const BATCH_SIZE = Number(process.env.BATCH_SIZE || 250);
 const WAIT_SECONDS = Number(process.env.WAIT_SECONDS || 0);
 const MODE = String(process.env.MODE || 'both'); // 'both' or 'urls'
+const BATCH_INDEX = Number(process.env.BATCH_INDEX || 0);
 
 const EXTRACT_TIMEOUT_MS = 20000;
 const FETCH_TIMEOUT_MS = 20000;
@@ -191,8 +192,18 @@ async function run() {
   }
 
   const raw = fs.readFileSync(INPUT_FILE, 'utf-8');
-  const mcList = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  console.log(`[${now()}] MCs loaded: ${mcList.length} from ${INPUT_FILE}`);
+  const allMCs = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+  const start = BATCH_INDEX * BATCH_SIZE;
+  const end = start + BATCH_SIZE;
+  const mcList = allMCs.slice(start, end);
+
+  console.log(`[${now()}] Total MCs: ${allMCs.length}, running batch ${BATCH_INDEX} → ${start}–${end - 1}, count=${mcList.length}`);
+
+  if (mcList.length === 0) {
+    console.log(`[${now()}] No MCs in this batch. Exiting.`);
+    return;
+  }
 
   const rows = [];
   const validUrls = [];
@@ -211,7 +222,7 @@ async function run() {
 
   // Write CSV for this run
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const outCsv = path.join(OUTPUT_DIR, `fmcsa_batch_${ts}.csv`);
+  const outCsv = path.join(OUTPUT_DIR, `fmcsa_batch_${BATCH_INDEX}_${ts}.csv`);
   const headers = ['email', 'mcNumber', 'phone', 'url'];
   const csv = [headers.join(',')]
     .concat(rows.map(r => headers.map(h => `"${String(r[h] || '').replace(/"/g, '""')}"`).join(',')))
@@ -220,7 +231,7 @@ async function run() {
   console.log(`[${now()}] CSV written: ${outCsv} (rows=${rows.length})`);
 
   if (MODE === 'urls' && validUrls.length) {
-    const listPath = path.join(OUTPUT_DIR, `fmcsa_remaining_urls_${Date.now()}.txt`);
+    const listPath = path.join(OUTPUT_DIR, `fmcsa_remaining_urls_${BATCH_INDEX}_${Date.now()}.txt`);
     fs.writeFileSync(listPath, validUrls.join('\n'));
     console.log(`[${now()}] Remaining URLs saved: ${listPath}`);
   }
