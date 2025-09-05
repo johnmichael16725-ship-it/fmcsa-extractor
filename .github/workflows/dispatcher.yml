@@ -22,7 +22,7 @@ jobs:
 
       - name: Dispatch extractor for each batch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           i=0
           for f in batches/*; do
